@@ -41,10 +41,20 @@ to_log() {
 	logger -t switch_display "${1}"
 }
 
+test_ddcutil() {
+	command ddcutil --help >/dev/null 2>&1 || {
+		error_text="ddcutil is not installed"
+		exit 2;}
+}
+
 cleanup_on_exit() {
 	local exit_code=${1} error_text=${2}
 	if (( exit_code != 0 )); then
-		to_log "Er ging iets mis"
+		if [[ ! -z "${error_text}" ]]; then
+			to_log "${error_text}"
+		else
+			to_log "Something went wrong"
+		fi
 	fi
 	rm -f "${CMD_PIPE}"
 }
@@ -61,6 +71,7 @@ get_display_input() {
 
 main() {
 
+	test_ddcutil
 	initialize
 
 	local key_cmd bus display model active input_arr=()
