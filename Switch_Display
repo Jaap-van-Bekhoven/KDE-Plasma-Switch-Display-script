@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+
+CMD_PIPE="/tmp/switch_display_pipe"
+declare -A INPUT_NAME_ARR
+
+trap 'cleanup_on_exit "${?}" "${error_text}"' EXIT
+
+initialize() {
+	local display model capabilities input_arr=()
+
+	local awk_input_name_arr='match($0,/0x[[0-9a-f]{2}/) { print substr($0,RSTART+2,RLENGTH-2),$2 }'
+	local awk_input_arr='match($0, /60\([ 0-9A-F]+\)/) { print tolower(substr($0, RSTART+3,RLENGTH-4)) }'
+	local awk_model='match($0, /model\([ 0-9a-zA-Z]+\)/) { print substr($0, RSTART+6,RLENGTH-7) }'
+
+	ALL_SCREEN_ARR=()
+
+	rm -f "${CMD_PIPE}" && mkfifo "${CMD_PIPE}"
+
+	# create an associative array of the video input sources and the corresponding NC values
+	while read -r KEY VALUE; do
+		INPUT_NAME_ARR[${KEY}]=${VALUE}
+	done < <(ddcutil vcpinfo 60 --verbose | awk "${awk_input_name_arr}")
+
+	# Loop over the current displays as bus number
+	while read -r display; do
+
+		# read the capabilities of the display
+		capabilities="$(ddcutil -b "${display}" --terse capabilities)"
+		# create an array of the video input sources
+		IFS=' ' read -r -a input_arr < <( awk "${awk_input_arr}" <<< "${capabilities}" )
+		# read the display model
+		model="$(awk "${awk_model}" <<< "${capabilities}")"
+
+		# create an array of all the display data
+		ALL_SCREEN_ARR+=( "${display},${model},${input_arr[*]}"  )
+
+	done < <(ddcutil detect --brief | awk -F- '/I2C bus/ { print $2 }')
+}
+
+to_log() {
+	logger -t switch_display "${1}"
+}
+
+cleanup_on_exit() {
+	local exit_code=${1} error_text=${2}
+	if (( exit_code != 0 )); then
+		to_log "Er ging iets mis"
+	fi
+	rm -f "${CMD_PIPE}"
+}
+
+set_display_input() {
+	local bus=${1} input=${2}
+	ddcutil -b "${bus}" setvcp 60 x"${input}"
+}
+
+get_display_input() {
+	local bus=${1}
+	ddcutil -b "${bus}" --terse getvcp 60 | awk -Fx '{print $2}'
+}
+
+main() {
+
+	initialize
+
+	local key_cmd bus display model active input_arr=()
+		
+	while true
+	do
+		if read -r key_cmd <"${CMD_PIPE}"; then
+
+			# screen switch code
+			if [[ "${key_cmd}" =~ ^SCREEN_[0-9]{1,2}$ ]]; then
+				display=$(( ${key_cmd##SCREEN_} - 1 ))  # off by one
+
+				# get the screen data for _one_ screen from the _all_ screens array
+				IFS=',' read -r bus model input_arr <<< "${ALL_SCREEN_ARR[${display}]}"
+				read -r -a input_arr <<< "${input_arr}"
+				input_current="$(get_display_input "${bus}")"
+
+				input_set="$(kdialog --title "Switch Display" --radiolist "Display $((display+1)) (${model})" $(
+					for ((i=0;i<=$((${#input_arr[@]}-1));i++)); do
+						# ensure the current input is selected in kdialog
+						[[ ${input_arr[${i}]} == "${input_current}" ]] && active="on" || active="off"
+						echo -n "${input_arr[${i}]} ${INPUT_NAME_ARR[${input_arr[${i}]}]} ${active} "
+					done
+				))"
+
+				if [[ ${input_set} != "" ]] && [[ ${input_set} != "${input_current}" ]]; then
+					set_display_input "${bus}" "${input_set}"
+					to_log "Switched display ${display} to ${INPUT_NAME_ARR[${input_set}]}"
+				fi
+			else
+				to_log "Command ${key_cmd} not known"
+			fi
+		fi
+	done
+}
+
+main "$@"
