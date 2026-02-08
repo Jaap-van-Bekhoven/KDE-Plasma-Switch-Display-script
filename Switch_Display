@@ -42,9 +42,10 @@ to_log() {
 }
 
 test_ddcutil() {
-	command ddcutil --help >/dev/null 2>&1 || {
-		error_text="ddcutil is not installed"
-		exit 2;}
+	command ddcutil --help >/dev/null 2>&1 && return
+
+	error_text="ddcutil is not installed"
+	exit 2
 }
 
 cleanup_on_exit() {
