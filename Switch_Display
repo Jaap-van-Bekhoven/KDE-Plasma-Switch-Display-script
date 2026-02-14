@@ -1,112 +1,156 @@
 #!/usr/bin/env bash
 
+# Version: 17
+
+SCRIPT_NAME="${0##*/}"
 CMD_PIPE="/tmp/switch_display_pipe"
 declare -A INPUT_NAME_ARR
 
-trap 'cleanup_on_exit "${?}" "${error_text}"' EXIT
+ERROR_ARR[0]="Switch_Display has cleanly shut down"
+ERROR_ARR[1]="ddcutil is not installed"
+ERROR_ARR[2]="ddcutil threw an error"
+
+trap 'cleanup_on_exit "${?}"' EXIT
 
 initialize() {
-	local display model capabilities input_arr=()
+	# creates the ALL_SCREEN_ARR and INPUT_NAME_ARR
 
-	local awk_input_name_arr='match($0,/0x[[0-9a-f]{2}/) { print substr($0,RSTART+2,RLENGTH-2),$2 }'
-	local awk_input_arr='match($0, /60\([ 0-9A-F]+\)/) { print tolower(substr($0, RSTART+3,RLENGTH-4)) }'
-	local awk_model='match($0, /model\([ 0-9a-zA-Z]+\)/) { print substr($0, RSTART+6,RLENGTH-7) }'
-
-	ALL_SCREEN_ARR=()
+	local key capabilities caps bus input_arr model bus_arr=()
 
 	rm -f "${CMD_PIPE}" && mkfifo "${CMD_PIPE}"
 
-	# create an associative array of the video input sources and the corresponding NC values
-	while read -r KEY VALUE; do
-		INPUT_NAME_ARR[${KEY}]=${VALUE}
-	done < <(ddcutil vcpinfo 60 --verbose | awk "${awk_input_name_arr}")
+	# create an ass. array of the video inputs and the hex values
+	while read -r LINE
+	do
+		if [[ "${LINE}" =~ ^\s*0x ]]
+		then
+			key="${LINE#*0x}"
+			key="${key%%:*}"
+			INPUT_NAME_ARR["${key}"]="${LINE#* }"
+		fi
+	done < <(ddcutil vcpinfo 60 --verbose || exit 2)
+
+
+	# create an array of the I2C busses
+	while read -r LINE
+	do
+		[[ "${LINE}" =~ I2C ]] && bus_arr+=("${LINE#*-}")
+	done < <(ddcutil detect --brief || exit 2)
+
 
 	# Loop over the current displays as bus number
-	while read -r display; do
+	ALL_SCREEN_ARR=()
+	for bus in "${bus_arr[@]}"
+	do
 
 		# read the capabilities of the display
-		capabilities="$(ddcutil -b "${display}" --terse capabilities)"
-		# create an array of the video input sources
-		IFS=' ' read -r -a input_arr < <( awk "${awk_input_arr}" <<< "${capabilities}" )
+		capabilities="$(ddcutil --bus "${bus}" --terse capabilities || exit 2)"
+
 		# read the display model
-		model="$(awk "${awk_model}" <<< "${capabilities}")"
+		caps=${capabilities#*model(}
+		model="${caps%%)*}"
+
+		# read the current input
+		input_current=$(ddcutil --bus "${bus}" --terse getvcp 60 || exit 2)
+		input_current="${input_current#*x}"
+
+		# read the video input sources
+		caps=${capabilities#* 60(}
+		caps=${caps%%)*}
+		input_arr="${caps,,}"
 
 		# create an array of all the display data
-		ALL_SCREEN_ARR+=( "${display},${model},${input_arr[*]}"  )
+		ALL_SCREEN_ARR+=( "${bus},${model},${input_current},${input_arr}"  )
 
-	done < <(ddcutil detect --brief | awk -F- '/I2C bus/ { print $2 }')
+	done
+
 }
+
 
 to_log() {
-	logger -t switch_display "${1}"
+	logger -t "${SCRIPT_NAME// /_}" "${1}"
 }
+
 
 test_ddcutil() {
-	command ddcutil --help >/dev/null 2>&1 && return
-
-	error_text="ddcutil is not installed"
-	exit 2
+	command ddcutil --help >/dev/null 2>&1 || exit 1
 }
 
+
 cleanup_on_exit() {
-	local exit_code=${1} error_text=${2}
-	if (( exit_code != 0 )); then
-		if [[ ! -z "${error_text}" ]]; then
-			to_log "${error_text}"
-		else
-			to_log "Something went wrong"
-		fi
-	fi
+	local exit_code=${1}
+
+	to_log "${ERROR_ARR["${exit_code}"]}"
+
 	rm -f "${CMD_PIPE}"
 }
 
-set_display_input() {
-	local bus=${1} input=${2}
-	ddcutil -b "${bus}" setvcp 60 x"${input}"
+
+kdialog_radiolist() {
+	local kdialog_command display="${1}" model="${2}" input_current="${3}"
+	local input_arr=( "${@:4:${#@}}" )
+
+	kdialog_command="kdialog --title \"${SCRIPT_NAME}\" --radiolist" 
+	kdialog_command+=" \"Display $((display+1)) (${model})\""
+
+	for ((i=0;i<=$((${#input_arr[@]}-1));i++))
+	do
+
+		kdialog_command+=" ${input_arr[${i}]} ${INPUT_NAME_ARR[${input_arr[${i}]}]}"
+
+		# ensure the current input is selected in kdialog
+		kdialog_command+=$([[ ${input_arr[${i}]} == "${input_current}" ]] && echo " on" || echo " off")
+
+	done	
+
+	echo "${kdialog_command}"
 }
 
-get_display_input() {
-	local bus=${1}
-	ddcutil -b "${bus}" --terse getvcp 60 | awk -Fx '{print $2}'
-}
 
 main() {
 
 	test_ddcutil
 	initialize
 
-	local key_cmd bus display model active input_arr=()
-		
+	local key_cmd bus display model input_arr=()
+
 	while true
 	do
-		if read -r key_cmd <"${CMD_PIPE}"; then
+
+		if read -r key_cmd <"${CMD_PIPE}"
+		then
 
 			# screen switch code
-			if [[ "${key_cmd}" =~ ^SCREEN_[0-9]{1,2}$ ]]; then
+			if [[ "${key_cmd}" =~ ^SCREEN_[0-9]{1,2}$ ]]
+			then
+
 				display=$(( ${key_cmd##SCREEN_} - 1 ))  # off by one
 
 				# get the screen data for _one_ screen from the _all_ screens array
-				IFS=',' read -r bus model input_arr <<< "${ALL_SCREEN_ARR[${display}]}"
+				IFS=',' read -r bus model input_current input_arr <<< "${ALL_SCREEN_ARR[${display}]}"
 				read -r -a input_arr <<< "${input_arr}"
-				input_current="$(get_display_input "${bus}")"
 
-				input_set="$(kdialog --title "Switch Display" --radiolist "Display $((display+1)) (${model})" $(
-					for ((i=0;i<=$((${#input_arr[@]}-1));i++)); do
-						# ensure the current input is selected in kdialog
-						[[ ${input_arr[${i}]} == "${input_current}" ]] && active="on" || active="off"
-						echo -n "${input_arr[${i}]} ${INPUT_NAME_ARR[${input_arr[${i}]}]} ${active} "
-					done
-				))"
+				input_set="$( eval "$( kdialog_radiolist "${display}" "${model}" "${input_current}" "${input_arr[@]}" )" )"
 
-				if [[ ${input_set} != "" ]] && [[ ${input_set} != "${input_current}" ]]; then
-					set_display_input "${bus}" "${input_set}"
+				if [[ ${input_set} != "" ]] && [[ ${input_set} != "${input_current}" ]]
+				then
+
+					ddcutil --bus "${bus}" setvcp 60 x"${input_set}" || exit 2
+					ALL_SCREEN_ARR["${display}"]="${bus},${model},${input_set},${input_arr[*]}"
 					to_log "Switched display ${display} to ${INPUT_NAME_ARR[${input_set}]}"
+
 				fi
+
 			else
+
 				to_log "Command ${key_cmd} not known"
+
 			fi
+
 		fi
+
 	done
+
 }
 
 main "$@"
