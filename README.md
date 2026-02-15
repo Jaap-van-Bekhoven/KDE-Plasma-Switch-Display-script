@@ -1,8 +1,8 @@
-Need to write README
+README
 
 Required are package kdialog for the pop-up chooser window, and package ddcutil for the communication with and control of the displays.
 
-To start de switch screen action, and pop-up the kdialog, choose a keyboard shortcut, and in Plasma System Settings create a command like:
+To start de switch screen action, and pop-up the kdialog, choose a keyboard shortcut, and in Plasma System Settings "Keyboard > Shortcuts" create a shortcut command like:
 
 Command: echo "SCREEN_1" > /tmp/switch_display_pipe
 Name:    Switch Screen 1
