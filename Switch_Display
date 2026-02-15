@@ -15,26 +15,26 @@ trap 'cleanup_on_exit "${?}"' EXIT
 initialize() {
 	# creates the ALL_SCREEN_ARR and INPUT_NAME_ARR
 
-	local key capabilities caps bus input_arr model bus_arr=()
+	local line key capabilities caps bus input_arr model bus_arr=()
 
 	rm -f "${CMD_PIPE}" && mkfifo "${CMD_PIPE}"
 
 	# create an ass. array of the video inputs and the hex values
-	while read -r LINE
+	while read -r line
 	do
-		if [[ "${LINE}" =~ ^\s*0x ]]
+		if [[ "${line}" =~ ^\s*0x ]]
 		then
-			key="${LINE#*0x}"
+			key="${line#*0x}"
 			key="${key%%:*}"
-			INPUT_NAME_ARR["${key}"]="${LINE#* }"
+			INPUT_NAME_ARR["${key}"]="${line#*: }"
 		fi
 	done < <(ddcutil vcpinfo 60 --verbose || exit 2)
 
 
 	# create an array of the I2C busses
-	while read -r LINE
+	while read -r line
 	do
-		[[ "${LINE}" =~ I2C ]] && bus_arr+=("${LINE#*-}")
+		[[ "${line}" =~ I2C ]] && bus_arr+=("${line#*-}")
 	done < <(ddcutil detect --brief || exit 2)
 
 
@@ -73,7 +73,7 @@ to_log() {
 
 
 test_ddcutil() {
-	command ddcutil --help >/dev/null 2>&1 || exit 1
+	command ddcutil --help &>/dev/null || exit 1
 }
 
 
@@ -130,7 +130,13 @@ main() {
 				IFS=',' read -r bus model input_current input_arr <<< "${ALL_SCREEN_ARR[${display}]}"
 				read -r -a input_arr <<< "${input_arr}"
 
-				input_set="$( eval "$( kdialog_radiolist "${display}" "${model}" "${input_current}" "${input_arr[@]}" )" )"
+				input_set="$( eval "$(
+					kdialog_radiolist "${display}" \
+									  "${model}" \
+									  "${input_current}" \
+									  "${input_arr[@]}" \
+									  )" \
+				)"
 
 				if [[ ${input_set} != "" ]] && [[ ${input_set} != "${input_current}" ]]
 				then
