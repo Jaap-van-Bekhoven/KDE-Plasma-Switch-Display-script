@@ -1,4 +1,8 @@
-README
+SWITCH_DISPLAY
+
+This bash script is configured to run in the background and listen for a keyboard shortcut (one for each configured display). When the keyboard shortcut is pressed, a kdialog window wil start and offer a choice of display inputs.
+
+The script will at startup detect the display(s) and create the configuration required to select the different display inputs. This happens only once at startup, so when an extra display is connected it will not be configured automatically. Fortunately the KDE Plasma Autostart, where the script is integrated in Plasma, makes restarting easy.
 
 Required are package kdialog for the pop-up chooser window, and package ddcutil for the communication with and control of the displays.
 
