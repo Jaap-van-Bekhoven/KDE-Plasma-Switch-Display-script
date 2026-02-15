@@ -14,3 +14,6 @@ Do the same for other displays
 To ensure the is started together with the Plasma desktop, copy the script to an convenient directory and add the script the the Plasma System Settings "System > Autostart" settings.
 
 The script will automatically create the fifo file /tmp/switch_display_pipe, hitting the configured keyboard shortcut will send "SCREEN_1", or "SCREEN_2" to the fifo file and the read loop in the script will pick up the send message and trigger a switch screen action.
+
+<img width="284" height="312" alt="image" src="https://github.com/user-attachments/assets/978bce85-0962-4a1c-a6cb-382ff3749abe" />
+Example of a input switch dialog window
